@@ -17,7 +17,7 @@ def load_cluster_labels(path: Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Cluster file missing columns: {missing}")
 
-    out = df[["ID", "RefinedCluster"]].copy()
+    out = df.copy()
     out["ForecastGroup"] = out["RefinedCluster"].astype(str)
     out.loc[out["RefinedCluster"] == -1, "ForecastGroup"] = "inactive"
     return out
