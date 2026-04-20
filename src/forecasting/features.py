@@ -1,11 +1,10 @@
+from tqdm.auto import tqdm
 import numpy as np
 import pandas as pd
-
 
 LAGS = [1, 7, 14, 28]
 ROLL_WINDOWS = [7, 14, 28]
 MAX_LAG = max(LAGS)
-
 
 def make_time_features(ds: pd.Timestamp) -> dict:
     dow = ds.dayofweek
@@ -20,7 +19,6 @@ def make_time_features(ds: pd.Timestamp) -> dict:
         "doy_sin": np.sin(2 * np.pi * doy / 366),
         "doy_cos": np.cos(2 * np.pi * doy / 366),
     }
-
 
 def make_history_features(history: np.ndarray, ds: pd.Timestamp) -> dict:
     history = np.asarray(history, dtype=float)
@@ -41,11 +39,11 @@ def make_history_features(history: np.ndarray, ds: pd.Timestamp) -> dict:
     feats["hist_zero_fraction"] = float(np.mean(history == 0))
     return feats
 
-
 def make_training_frame(
     train_wide: pd.DataFrame,
     cluster_labels: pd.DataFrame,
     static_features: pd.DataFrame | None = None,
+    show_progress: bool = False,
 ) -> pd.DataFrame:
     date_cols = [c for c in train_wide.columns if c != "ID"]
     dates = pd.to_datetime(date_cols)
@@ -56,8 +54,11 @@ def make_training_frame(
         static_features = static_features.set_index("ID")
 
     rows = []
+    iterator = train_wide.iterrows()
+    if show_progress:
+        iterator = tqdm(iterator, total=len(train_wide), desc="Building training rows")
 
-    for _, row in train_wide.iterrows():
+    for _, row in iterator:
         hh_id = row["ID"]
         y = row[date_cols].to_numpy(dtype=float)
         forecast_group = group_map.get(hh_id, "unknown")

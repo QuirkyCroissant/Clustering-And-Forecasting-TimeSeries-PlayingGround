@@ -1,7 +1,7 @@
+from tqdm.auto import tqdm
 import numpy as np
 import pandas as pd
 from .features import make_history_features
-
 
 def _predict_one_series(model, history, future_dates, static_vals=None):
     history = list(map(float, history))
@@ -19,8 +19,7 @@ def _predict_one_series(model, history, future_dates, static_vals=None):
 
     return preds
 
-
-def forecast_global(train_23_wide, future_dates, model, static_features=None):
+def forecast_global(train_23_wide, future_dates, model, static_features=None, show_progress=True):
     date_cols = [c for c in train_23_wide.columns if c != "ID"]
 
     static_map = {}
@@ -28,7 +27,11 @@ def forecast_global(train_23_wide, future_dates, model, static_features=None):
         static_map = static_features.set_index("ID").to_dict(orient="index")
 
     rows = []
-    for _, row in train_23_wide.iterrows():
+    iterator = train_23_wide.iterrows()
+    if show_progress:
+        iterator = tqdm(iterator, total=len(train_23_wide), desc="Forecasting global")
+
+    for _, row in iterator:
         hh_id = row["ID"]
         history = row[date_cols].to_numpy(dtype=float)
 
@@ -47,7 +50,6 @@ def forecast_global(train_23_wide, future_dates, model, static_features=None):
     cols = ["ID"] + [pd.Timestamp(d).strftime("%Y-%m-%d") for d in future_dates]
     return pd.DataFrame(rows, columns=cols)
 
-
 def forecast_by_group(
     train_23_wide,
     cluster_labels,
@@ -55,6 +57,7 @@ def forecast_by_group(
     group_models,
     fallback_model=None,
     static_features=None,
+    show_progress=True,
 ):
     date_cols = [c for c in train_23_wide.columns if c != "ID"]
     group_map = cluster_labels.set_index("ID")["ForecastGroup"].to_dict()
@@ -64,7 +67,11 @@ def forecast_by_group(
         static_map = static_features.set_index("ID").to_dict(orient="index")
 
     rows = []
-    for _, row in train_23_wide.iterrows():
+    iterator = train_23_wide.iterrows()
+    if show_progress:
+        iterator = tqdm(iterator, total=len(train_23_wide), desc="Forecasting by cluster")
+
+    for _, row in iterator:
         hh_id = row["ID"]
         history = row[date_cols].to_numpy(dtype=float)
         group = group_map.get(hh_id, "unknown")
