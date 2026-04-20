@@ -7,7 +7,15 @@
 !data/
 !notebooks/**
 !data/**
+!src
+!src/**
 **/.ipynb_checkpoints/
+**/__pycache__/
+*.egg-info/
+*.egg/
+.eggs/
+dist/
+build/
 
 outputs/models/tmp/
 outputs/predictions/tmp/
