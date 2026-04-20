@@ -8,3 +8,7 @@
 !notebooks/**
 !data/**
 **/.ipynb_checkpoints/
+
+outputs/models/tmp/
+outputs/predictions/tmp/
+notebooks/lightning_logs/
