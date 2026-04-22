@@ -254,11 +254,16 @@ def plot_sample_households_by_group(
 
     meta_df = meta_df[["ID", bucket_col, cluster_col]].drop_duplicates()
 
-    sampled = (
-        meta_df.groupby([bucket_col, cluster_col], group_keys=False)
-        .apply(lambda g: g.sample(n=min(n_per_group, len(g)), random_state=random_state))
-        .reset_index(drop=True)
-    )
+    sampled_parts = []
+    for _, group_df in meta_df.groupby([bucket_col, cluster_col], sort=False):
+        sampled_parts.append(
+            group_df.sample(
+                n=min(n_per_group, len(group_df)),
+                random_state=random_state,
+            )
+        )
+
+    sampled = pd.concat(sampled_parts, ignore_index=True) if sampled_parts else meta_df.iloc[0:0].copy()
 
     group_keys = sampled[[bucket_col, cluster_col]].drop_duplicates()
     if max_groups is not None:

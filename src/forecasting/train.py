@@ -44,7 +44,6 @@ def get_model(model_name: str, random_state: int = 42, use_gpu: bool = False):
 
 
 def _split_train_valid(df):
-    df = df.sort_values(["ds", "ID"]).reset_index(drop=True)
     unique_ds = np.sort(df["ds"].unique())
 
     if len(unique_ds) < 2:
@@ -52,11 +51,7 @@ def _split_train_valid(df):
 
     split_idx = int(len(unique_ds) * 0.8)
     split_idx = min(max(split_idx, 1), len(unique_ds) - 1)
-    split_ds = unique_ds[split_idx]
-
-    train_part = df[df["ds"] < split_ds]
-    valid_part = df[df["ds"] >= split_ds]
-    return train_part, valid_part, split_ds
+    return unique_ds[split_idx]
 
 
 def _fit_model(model, model_name, X_train, y_train, X_valid, y_valid, verbose):
@@ -107,12 +102,14 @@ def fit_global_model(
 ):
     model = get_model(model_name, use_gpu=use_gpu)
 
-    train_part, valid_part, split_ds = _split_train_valid(train_df)
+    split_ds = _split_train_valid(train_df)
+    train_mask = train_df["ds"] < split_ds
+    valid_mask = ~train_mask
 
-    X_train = train_part[feature_cols].fillna(0.0)
-    y_train = train_part["target"].values
-    X_valid = valid_part[feature_cols].fillna(0.0)
-    y_valid = valid_part["target"].values
+    X_train = train_df.loc[train_mask, feature_cols]
+    y_train = train_df.loc[train_mask, "target"].to_numpy(copy=False)
+    X_valid = train_df.loc[valid_mask, feature_cols]
+    y_valid = train_df.loc[valid_mask, "target"].to_numpy(copy=False)
 
     eval_log = _fit_model(
         model=model,
@@ -125,8 +122,8 @@ def fit_global_model(
     )
 
     metadata = _build_fit_metadata(
-        train_part=train_part,
-        valid_part=valid_part,
+        train_part=train_df.loc[train_mask, ["ID", "ds"]],
+        valid_part=train_df.loc[valid_mask, ["ID", "ds"]],
         split_ds=split_ds,
         feature_cols=feature_cols,
         model_name=model_name,
@@ -152,11 +149,15 @@ def fit_cluster_models(
     verbose=False,
 ):
     model_dict = {}
-    groups = list(train_df.groupby("ForecastGroup"))
+    groups = train_df.groupby("ForecastGroup", observed=True)
 
     iterator = groups
     if show_progress:
-        iterator = tqdm(groups, total=len(groups), desc=f"Training {model_name} cluster models")
+        iterator = tqdm(
+            groups,
+            total=groups.ngroups,
+            desc=f"Training {model_name} cluster models",
+        )
 
     for group, grp in iterator:
         if group == "inactive":
@@ -169,19 +170,24 @@ def fit_cluster_models(
             continue
 
         try:
-            train_part, valid_part, split_ds = _split_train_valid(grp)
+            split_ds = _split_train_valid(grp)
         except ValueError:
             continue
 
+        train_mask = grp["ds"] < split_ds
+        valid_mask = ~train_mask
+
+        train_part = grp.loc[train_mask, ["ID", "ds"]]
+        valid_part = grp.loc[valid_mask, ["ID", "ds"]]
         if len(train_part) < min_rows or len(valid_part) == 0:
             continue
 
         model = get_model(model_name, use_gpu=use_gpu)
 
-        X_train = train_part[feature_cols].fillna(0.0)
-        y_train = train_part["target"].values
-        X_valid = valid_part[feature_cols].fillna(0.0)
-        y_valid = valid_part["target"].values
+        X_train = grp.loc[train_mask, feature_cols]
+        y_train = grp.loc[train_mask, "target"].to_numpy(copy=False)
+        X_valid = grp.loc[valid_mask, feature_cols]
+        y_valid = grp.loc[valid_mask, "target"].to_numpy(copy=False)
 
         eval_log = _fit_model(
             model=model,
