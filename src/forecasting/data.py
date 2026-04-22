@@ -30,12 +30,38 @@ def load_static_features(path: Path) -> pd.DataFrame:
     return df
 
 
+def discover_cluster_cases(cluster_dir: Path, pattern: str = "case*_clusters.csv") -> dict[str, Path]:
+    case_files = sorted(cluster_dir.glob(pattern))
+    if not case_files:
+        raise FileNotFoundError(f"No cluster case files matching {pattern!r} found in {cluster_dir}")
+
+    return {
+        path.stem.replace("_clusters", ""): path
+        for path in case_files
+    }
+
+
 def ensure_output_dirs(repo_root: Path) -> dict:
     paths = {
         "metrics": repo_root / "outputs" / "metrics",
         "plots": repo_root / "outputs" / "plots",
         "predictions": repo_root / "outputs" / "predictions",
         "models": repo_root / "outputs" / "models",
+    }
+    for p in paths.values():
+        p.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def ensure_experiment_dirs(repo_root: Path, experiment_name: str) -> dict:
+    root = repo_root / "outputs" / "experiments" / experiment_name
+    paths = {
+        "root": root,
+        "metrics": root / "metrics",
+        "plots": root / "plots",
+        "predictions": root / "predictions",
+        "metadata": root / "metadata",
+        "models": root / "models",
     }
     for p in paths.values():
         p.mkdir(parents=True, exist_ok=True)

@@ -74,6 +74,7 @@ def make_training_frame(
 
             rec = {
                 "ID": hh_id,
+                "ds": ds,
                 "ForecastGroup": forecast_group,
                 "target": float(target),
             }
