@@ -273,7 +273,7 @@ def forecast_by_group(
         if group == "inactive":
             continue
 
-        model = group_models.get(group, fallback_model)
+        model = group_models.get(group, {}).get("model", fallback_model)
         if model is None:
             continue
 

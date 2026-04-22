@@ -1,5 +1,6 @@
 from tqdm.auto import tqdm
 from lightgbm import log_evaluation, early_stopping
+import numpy as np 
 
 def get_model(model_name: str, random_state: int = 42, use_gpu: bool = False):
     model_name = model_name.lower()
@@ -42,48 +43,49 @@ def get_model(model_name: str, random_state: int = 42, use_gpu: bool = False):
 def fit_global_model(train_df, feature_cols, model_name="lgbm", use_gpu=False):
     model = get_model(model_name, use_gpu=use_gpu)
 
-    split_idx = int(len(train_df) * 0.8)
-    train_part = train_df.iloc[:split_idx]
-    valid_part = train_df.iloc[split_idx:]
+    train_df = train_df.sort_values(["ds", "ID"]).reset_index(drop=True)
+    unique_ds = np.sort(train_df["ds"].unique())
+    split_idx = int(len(unique_ds) * 0.8)
+    split_ds = unique_ds[split_idx]
+
+    train_part = train_df[train_df["ds"] < split_ds]
+    valid_part = train_df[train_df["ds"] >= split_ds]
 
     X_train = train_part[feature_cols].fillna(0.0)
     y_train = train_part["target"].values
     X_valid = valid_part[feature_cols].fillna(0.0)
     y_valid = valid_part["target"].values
 
-    if model_name == "lgbm":
-        model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_valid, y_valid)],
-            eval_metric="l1",
-            callbacks=[
-                log_evaluation(period=50),
-                early_stopping(stopping_rounds=100),
-            ],
-        )
-    elif model_name == "xgb":
+    if model_name == "xgb":
         model.fit(
             X_train,
             y_train,
             eval_set=[(X_valid, y_valid)],
             verbose=50,
         )
+        eval_log = model.evals_result()
     else:
         model.fit(X_train, y_train)
+        eval_log = {}
 
-    return model
+    return {
+        "model": model,
+        "eval_log": eval_log,
+        "n_rows_train": len(train_part),
+        "n_rows_valid": len(valid_part),
+        "n_households": train_df["ID"].nunique(),
+    }
 
 def fit_cluster_models(
     train_df,
     feature_cols,
     model_name="lgbm",
+    min_households=30,
     min_rows=500,
     use_gpu=False,
     show_progress=True,
 ):
-    models = {}
-    counts = train_df["ForecastGroup"].value_counts()
+    model_dict = {}
     groups = list(train_df.groupby("ForecastGroup"))
 
     iterator = groups
@@ -93,16 +95,52 @@ def fit_cluster_models(
     for group, grp in iterator:
         if group == "inactive":
             continue
-        if counts[group] < min_rows:
-            print(f"Skipping {group} because it has only {counts[group]} rows")
+
+        n_households = grp["ID"].nunique()
+        n_rows = len(grp)
+
+        if n_households < min_households or n_rows < min_rows:
             continue
 
-        print(f"Training group {group} with {len(grp):,} rows")
-        model = get_model(model_name, use_gpu=use_gpu)
-        X = grp[feature_cols].fillna(0.0)
-        y = grp["target"].values
-        model.fit(X, y)
-        models[group] = model
+        grp = grp.sort_values(["ds", "ID"]).reset_index(drop=True)
+        unique_ds = np.sort(grp["ds"].unique())
+        if len(unique_ds) < 10:
+            continue
 
-    print(f"Finished {len(models)} cluster models")
-    return models
+        split_idx = int(len(unique_ds) * 0.8)
+        split_ds = unique_ds[split_idx]
+
+        train_part = grp[grp["ds"] < split_ds]
+        valid_part = grp[grp["ds"] >= split_ds]
+
+        if len(train_part) < min_rows or len(valid_part) == 0:
+            continue
+
+        model = get_model(model_name, use_gpu=use_gpu)
+
+        X_train = train_part[feature_cols].fillna(0.0)
+        y_train = train_part["target"].values
+        X_valid = valid_part[feature_cols].fillna(0.0)
+        y_valid = valid_part["target"].values
+
+        if model_name == "xgb":
+            model.fit(
+                X_train,
+                y_train,
+                eval_set=[(X_valid, y_valid)],
+                verbose=False,
+            )
+            eval_log = model.evals_result()
+        else:
+            model.fit(X_train, y_train)
+            eval_log = {}
+
+        model_dict[group] = {
+            "model": model,
+            "eval_log": eval_log,
+            "n_households": n_households,
+            "n_rows_train": len(train_part),
+            "n_rows_valid": len(valid_part),
+        }
+
+    return model_dict
