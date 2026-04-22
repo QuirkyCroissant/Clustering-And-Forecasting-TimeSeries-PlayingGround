@@ -69,6 +69,7 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         static_features=static_features,
         show_progress=True,
     )
+    train_frame_shape = list(train_df.shape)
     feature_cols = [
         col for col in train_df.columns
         if col not in ["ID", "ds", "ForecastGroup", "target"]
@@ -173,7 +174,7 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         "random_state": settings["random_state"],
         "train_shape": list(train_23.shape),
         "test_shape": list(test_24.shape),
-        "train_frame_shape": list(train_df.shape),
+        "train_frame_shape": train_frame_shape,
         "feature_cols": feature_cols,
         "n_feature_cols": len(feature_cols),
         "trained_groups": sorted(map(str, cluster_fits.keys())),
