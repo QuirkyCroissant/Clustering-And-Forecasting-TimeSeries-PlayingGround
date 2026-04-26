@@ -2,18 +2,10 @@ from tqdm.auto import tqdm
 import numpy as np
 import pandas as pd
 
-from .features import LAGS, ROLL_WINDOWS
+from .features import LAGS, ROLL_WINDOWS, SEASONAL_PRIOR_FEATURES, TIME_FEATURES
 
 
-TIME_FEATURE_ORDER = [
-    "dow",
-    "month",
-    "doy",
-    "dow_sin",
-    "dow_cos",
-    "doy_sin",
-    "doy_cos",
-]
+TIME_FEATURE_ORDER = TIME_FEATURES
 
 HISTORY_FEATURE_ORDER = (
     [f"lag_{lag}" for lag in LAGS]
@@ -59,6 +51,12 @@ def _prepare_future_date_features(future_dates):
         "dow_cos": np.cos(2 * np.pi * dow / 7).astype(np.float32),
         "doy_sin": np.sin(2 * np.pi * doy / 366).astype(np.float32),
         "doy_cos": np.cos(2 * np.pi * doy / 366).astype(np.float32),
+        "quarter": future_dates.quarter.to_numpy(dtype=np.float32, copy=False),
+        "weekofyear": future_dates.isocalendar().week.to_numpy(dtype=np.float32, copy=False),
+        "day": future_dates.day.to_numpy(dtype=np.float32, copy=False),
+        "is_weekend": (dow >= 5).astype(np.float32),
+        "is_month_start": future_dates.is_month_start.astype(np.float32),
+        "is_month_end": future_dates.is_month_end.astype(np.float32),
     }
 
 
@@ -80,11 +78,80 @@ def _prepare_static_df(ids: np.ndarray, static_features: pd.DataFrame | None):
 
 
 def _default_feature_cols(static_cols: list[str]) -> list[str]:
-    return TIME_FEATURE_ORDER + HISTORY_FEATURE_ORDER + static_cols
+    return TIME_FEATURE_ORDER + HISTORY_FEATURE_ORDER + static_cols + SEASONAL_PRIOR_FEATURES
+
+
+def _add_seasonal_prior_features(
+    data: dict,
+    ids: np.ndarray,
+    group_arr: np.ndarray,
+    row_idx: np.ndarray,
+    step: int,
+    date_feature_store: dict,
+    seasonal_prior_store: dict | None,
+):
+    if seasonal_prior_store is None:
+        return
+
+    month = int(date_feature_store["month"][step])
+    dow = int(date_feature_store["dow"][step])
+    n_rows = len(row_idx)
+    data["global_month_mean"] = np.full(
+        n_rows,
+        seasonal_prior_store["global_month_mean"][month],
+        dtype=np.float32,
+    )
+    data["global_dow_mean"] = np.full(
+        n_rows,
+        seasonal_prior_store["global_dow_mean"][dow],
+        dtype=np.float32,
+    )
+    data["global_month_dow_mean"] = np.full(
+        n_rows,
+        seasonal_prior_store["global_month_dow_mean"][month, dow],
+        dtype=np.float32,
+    )
+
+    profile = seasonal_prior_store["profile"]
+    global_mean = seasonal_prior_store["global_mean"]
+    cluster_month = np.empty(n_rows, dtype=np.float32)
+    cluster_dow = np.empty(n_rows, dtype=np.float32)
+    cluster_month_dow = np.empty(n_rows, dtype=np.float32)
+    hh_month = np.empty(n_rows, dtype=np.float32)
+    hh_dow = np.empty(n_rows, dtype=np.float32)
+
+    for out_idx, src_idx in enumerate(row_idx):
+        group = str(group_arr[src_idx])
+        cluster_month[out_idx] = seasonal_prior_store["cluster_month_mean"].get(
+            group, seasonal_prior_store["global_month_mean"]
+        )[month]
+        cluster_dow[out_idx] = seasonal_prior_store["cluster_dow_mean"].get(
+            group, seasonal_prior_store["global_dow_mean"]
+        )[dow]
+        cluster_month_dow[out_idx] = seasonal_prior_store["cluster_month_dow_mean"].get(
+            group, seasonal_prior_store["global_month_dow_mean"]
+        )[month, dow]
+
+        hh_id = ids[src_idx]
+        if hh_id in profile.index:
+            hh_profile = profile.loc[hh_id]
+            hh_month[out_idx] = hh_profile.get(f"hh_month_mean_{month}", global_mean)
+            hh_dow[out_idx] = hh_profile.get(f"hh_dow_mean_{dow}", global_mean)
+        else:
+            hh_month[out_idx] = seasonal_prior_store["global_month_mean"][month]
+            hh_dow[out_idx] = seasonal_prior_store["global_dow_mean"][dow]
+
+    data["cluster_month_mean"] = cluster_month
+    data["cluster_dow_mean"] = cluster_dow
+    data["cluster_month_dow_mean"] = cluster_month_dow
+    data["hh_current_month_mean"] = hh_month
+    data["hh_current_dow_mean"] = hh_dow
 
 
 def _build_feature_frame(
     history_buffer: np.ndarray,
+    ids: np.ndarray,
+    group_arr: np.ndarray,
     row_idx: np.ndarray,
     current_end: int,
     step: int,
@@ -93,6 +160,7 @@ def _build_feature_frame(
     running_sum_sq: np.ndarray,
     running_zero_count: np.ndarray,
     static_df: pd.DataFrame | None = None,
+    seasonal_prior_store: dict | None = None,
     feature_cols: list[str] | None = None,
 ):
     row_idx = np.asarray(row_idx, dtype=np.int64)
@@ -101,13 +169,8 @@ def _build_feature_frame(
     data = {}
 
     # date features: scalar for this day, repeated for all rows in the batch
-    data["dow"] = np.full(n_rows, date_feature_store["dow"][step], dtype=np.float32)
-    data["month"] = np.full(n_rows, date_feature_store["month"][step], dtype=np.float32)
-    data["doy"] = np.full(n_rows, date_feature_store["doy"][step], dtype=np.float32)
-    data["dow_sin"] = np.full(n_rows, date_feature_store["dow_sin"][step], dtype=np.float32)
-    data["dow_cos"] = np.full(n_rows, date_feature_store["dow_cos"][step], dtype=np.float32)
-    data["doy_sin"] = np.full(n_rows, date_feature_store["doy_sin"][step], dtype=np.float32)
-    data["doy_cos"] = np.full(n_rows, date_feature_store["doy_cos"][step], dtype=np.float32)
+    for name in TIME_FEATURE_ORDER:
+        data[name] = np.full(n_rows, date_feature_store[name][step], dtype=np.float32)
 
     # lag features
     for lag in LAGS:
@@ -129,6 +192,15 @@ def _build_feature_frame(
     data["hist_mean"] = hist_mean.astype(np.float32)
     data["hist_std"] = np.sqrt(variance).astype(np.float32)
     data["hist_zero_fraction"] = (running_zero_count[row_idx] / current_len).astype(np.float32)
+    _add_seasonal_prior_features(
+        data=data,
+        ids=ids,
+        group_arr=group_arr,
+        row_idx=row_idx,
+        step=step,
+        date_feature_store=date_feature_store,
+        seasonal_prior_store=seasonal_prior_store,
+    )
 
     X = pd.DataFrame(data)
 
@@ -155,7 +227,9 @@ def forecast_global(
     train_23_wide,
     future_dates,
     model,
+    cluster_labels=None,
     static_features=None,
+    seasonal_prior_store=None,
     show_progress=True,
     feature_cols=None,
 ):
@@ -188,6 +262,16 @@ def forecast_global(
     if len(active_idx) == 0:
         return _to_output_df(ids, preds, future_dates)
 
+    if cluster_labels is None or "ForecastGroup" not in cluster_labels.columns:
+        group_arr = np.full(n_households, "unknown", dtype=object)
+    else:
+        group_df = pd.DataFrame({"ID": ids}).merge(
+            cluster_labels[["ID", "ForecastGroup"]],
+            on="ID",
+            how="left",
+        )
+        group_arr = group_df["ForecastGroup"].fillna("unknown").to_numpy()
+
     iterator = range(horizon)
     if show_progress:
         iterator = tqdm(iterator, total=horizon, desc="Forecasting global")
@@ -197,6 +281,8 @@ def forecast_global(
 
         X_step = _build_feature_frame(
             history_buffer=history_buffer,
+            ids=ids,
+            group_arr=group_arr,
             row_idx=active_idx,
             current_end=current_end,
             step=step,
@@ -205,6 +291,7 @@ def forecast_global(
             running_sum_sq=running_sum_sq,
             running_zero_count=running_zero_count,
             static_df=static_df,
+            seasonal_prior_store=seasonal_prior_store,
             feature_cols=feature_cols,
         )
 
@@ -227,7 +314,9 @@ def forecast_by_group(
     future_dates,
     group_models,
     fallback_model=None,
+    allowed_groups=None,
     static_features=None,
+    seasonal_prior_store=None,
     show_progress=True,
     feature_cols=None,
 ):
@@ -262,6 +351,8 @@ def forecast_by_group(
         how="left",
     )
     group_arr = group_df["ForecastGroup"].fillna("unknown").to_numpy()
+    if allowed_groups is not None:
+        allowed_groups = {str(group) for group in allowed_groups}
 
     routing = []
     for group in pd.unique(group_arr):
@@ -273,7 +364,11 @@ def forecast_by_group(
         if group == "inactive":
             continue
 
-        model = group_models.get(group, {}).get("model", fallback_model)
+        group_key = str(group)
+        if allowed_groups is not None and group_key not in allowed_groups:
+            model = fallback_model
+        else:
+            model = group_models.get(group, {}).get("model", fallback_model)
         if model is None:
             continue
 
@@ -289,6 +384,8 @@ def forecast_by_group(
         for _, idx, model in routing:
             X_step = _build_feature_frame(
                 history_buffer=history_buffer,
+                ids=ids,
+                group_arr=group_arr,
                 row_idx=idx,
                 current_end=current_end,
                 step=step,
@@ -297,6 +394,7 @@ def forecast_by_group(
                 running_sum_sq=running_sum_sq,
                 running_zero_count=running_zero_count,
                 static_df=static_df,
+                seasonal_prior_store=seasonal_prior_store,
                 feature_cols=feature_cols,
             )
 

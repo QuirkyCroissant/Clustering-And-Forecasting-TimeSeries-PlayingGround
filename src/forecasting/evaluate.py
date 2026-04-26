@@ -29,6 +29,38 @@ def summarise_mae(mae_df: pd.DataFrame, metric_col: str = "MAE") -> pd.DataFrame
     )
 
 
+def monthly_error_summary(
+    pred_wide: pd.DataFrame,
+    truth_wide: pd.DataFrame,
+    model_label: str,
+) -> pd.DataFrame:
+    pred = pred_wide.copy().rename(columns={pred_wide.columns[0]: "ID"})
+    truth = truth_wide.copy().rename(columns={truth_wide.columns[0]: "ID"})
+    pred = pred.set_index("ID").sort_index()
+    truth = truth.set_index("ID").sort_index()
+
+    common_cols = [c for c in truth.columns if c in pred.columns]
+    rows = []
+    for month, month_cols in pd.Series(common_cols).groupby(
+        pd.to_datetime(common_cols).month
+    ):
+        cols = list(month_cols)
+        errors = pred[cols] - truth[cols]
+        rows.append(
+            {
+                "month": int(month),
+                "n_days": len(cols),
+                "n_households": len(truth),
+                "mae": errors.abs().to_numpy().mean(),
+                "bias_pred_minus_actual": errors.to_numpy().mean(),
+                "actual_mean": truth[cols].to_numpy().mean(),
+                "pred_mean": pred[cols].to_numpy().mean(),
+                "model": model_label,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def get_cluster_metadata_columns(cluster_labels: pd.DataFrame) -> list[str]:
     meta_cols = ["ID"]
     for col in ["ForecastGroup", "RefinedCluster", "SparsityBucket", "SparsityGroup"]:

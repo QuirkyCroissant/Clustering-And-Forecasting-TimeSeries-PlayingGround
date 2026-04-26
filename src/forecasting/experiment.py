@@ -12,8 +12,8 @@ from .data import (
     load_static_features,
     load_wide_csv,
 )
-from .evaluate import evaluate_global_and_cluster, plot_sample_households_by_group
-from .features import make_training_frame
+from .evaluate import evaluate_global_and_cluster, monthly_error_summary, plot_sample_households_by_group
+from .features import make_seasonal_prior_store, make_training_frame, merge_static_features
 from .predict import forecast_by_group, forecast_global
 from .train import fit_cluster_models, fit_global_model
 
@@ -40,6 +40,252 @@ def write_json(path: Path, payload):
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
 
+def _get_setting(settings: dict, key: str, default):
+    return settings[key] if key in settings else default
+
+
+def _prepare_model_static_features(train_wide, cluster_labels, static_features, settings):
+    if _get_setting(settings, "include_profile_features", True):
+        return merge_static_features(train_wide, cluster_labels, static_features)
+    return static_features
+
+
+def _prepare_seasonal_prior_store(train_wide, cluster_labels, settings):
+    if not _get_setting(settings, "include_seasonal_priors", True):
+        return None
+    return make_seasonal_prior_store(train_wide, cluster_labels)
+
+
+def _build_feature_cols(train_df):
+    return [
+        col for col in train_df.columns
+        if col not in ["ID", "ds", "ForecastGroup", "target"]
+    ]
+
+
+def _route_decisions_from_compare(compare_summary, margin=0.0):
+    if compare_summary.empty:
+        return pd.DataFrame(
+            columns=[
+                "ForecastGroup",
+                "RefinedCluster",
+                "n_households",
+                "mean_mae_global",
+                "mean_mae_cluster",
+                "mean_delta",
+                "use_cluster_model",
+                "route_decision",
+            ]
+        )
+    decisions = compare_summary.copy()
+    decisions["use_cluster_model"] = decisions["mean_delta"] <= margin
+    decisions["route_decision"] = decisions["use_cluster_model"].map(
+        {True: "cluster_model", False: "global_fallback"}
+    )
+    return decisions
+
+
+def _allowed_groups(route_decisions):
+    if route_decisions.empty or "use_cluster_model" not in route_decisions.columns:
+        return set()
+    return set(
+        route_decisions.loc[
+            route_decisions["use_cluster_model"],
+            "ForecastGroup",
+        ].astype(str)
+    )
+
+
+def run_recursive_validation(
+    train_23,
+    cluster_labels,
+    static_features,
+    settings,
+    xgb_profile,
+):
+    validation_days = int(_get_setting(settings, "recursive_validation_days", 60))
+    date_cols = [c for c in train_23.columns if c != "ID"]
+    if validation_days >= len(date_cols) - 2:
+        validation_days = max(1, len(date_cols) // 5)
+
+    train_cols = date_cols[:-validation_days]
+    valid_cols = date_cols[-validation_days:]
+    train_prefix = train_23[["ID"] + train_cols].copy()
+    valid_truth = train_23[["ID"] + valid_cols].copy()
+    valid_dates = pd.to_datetime(valid_cols)
+
+    model_static = _prepare_model_static_features(train_prefix, cluster_labels, static_features, settings)
+    seasonal_prior_store = _prepare_seasonal_prior_store(train_prefix, cluster_labels, settings)
+    train_df = make_training_frame(
+        train_wide=train_prefix,
+        cluster_labels=cluster_labels,
+        static_features=model_static,
+        show_progress=False,
+        include_profile_features=False,
+        include_seasonal_priors=_get_setting(settings, "include_seasonal_priors", True),
+    )
+    feature_cols = _build_feature_cols(train_df)
+    model_params = _get_setting(settings, "xgb_params", None)
+
+    global_fit = fit_global_model(
+        train_df=train_df,
+        feature_cols=feature_cols,
+        model_name=settings["model_name"],
+        use_gpu=settings["gpu_enabled"],
+        model_params=model_params,
+        xgb_profile=xgb_profile,
+        verbose=False,
+    )
+    cluster_fits = fit_cluster_models(
+        train_df=train_df,
+        feature_cols=feature_cols,
+        model_name=settings["model_name"],
+        min_households=settings["min_cluster_households"],
+        min_rows=settings["min_cluster_rows"],
+        use_gpu=settings["gpu_enabled"],
+        model_params=model_params,
+        xgb_profile=xgb_profile,
+        show_progress=False,
+        verbose=False,
+    )
+
+    pred_global = forecast_global(
+        train_23_wide=train_prefix,
+        future_dates=valid_dates,
+        model=global_fit["model"],
+        cluster_labels=cluster_labels,
+        static_features=model_static,
+        seasonal_prior_store=seasonal_prior_store,
+        show_progress=False,
+        feature_cols=feature_cols,
+    )
+    pred_cluster = forecast_by_group(
+        train_23_wide=train_prefix,
+        cluster_labels=cluster_labels,
+        future_dates=valid_dates,
+        group_models=cluster_fits,
+        fallback_model=global_fit["model"],
+        static_features=model_static,
+        seasonal_prior_store=seasonal_prior_store,
+        show_progress=False,
+        feature_cols=feature_cols,
+    )
+    eval_tables = evaluate_global_and_cluster(
+        pred_global_wide=pred_global,
+        pred_cluster_wide=pred_cluster,
+        truth_wide=valid_truth,
+        cluster_labels=cluster_labels,
+        trained_groups=cluster_fits.keys(),
+        global_model_label=f"validation_global_{settings['model_name']}",
+        cluster_model_label=f"validation_cluster_{settings['model_name']}",
+    )
+    route_decisions = _route_decisions_from_compare(
+        eval_tables["cluster_compare_summary"],
+        margin=float(_get_setting(settings, "cluster_gate_margin", 0.0)),
+    )
+    allowed_groups = _allowed_groups(route_decisions)
+
+    pred_gated = forecast_by_group(
+        train_23_wide=train_prefix,
+        cluster_labels=cluster_labels,
+        future_dates=valid_dates,
+        group_models=cluster_fits,
+        fallback_model=global_fit["model"],
+        allowed_groups=allowed_groups,
+        static_features=model_static,
+        seasonal_prior_store=seasonal_prior_store,
+        show_progress=False,
+        feature_cols=feature_cols,
+    )
+    gated_eval_tables = evaluate_global_and_cluster(
+        pred_global_wide=pred_global,
+        pred_cluster_wide=pred_gated,
+        truth_wide=valid_truth,
+        cluster_labels=cluster_labels,
+        trained_groups=allowed_groups,
+        global_model_label=f"validation_global_{settings['model_name']}",
+        cluster_model_label=f"validation_gated_cluster_{settings['model_name']}",
+    )
+
+    overall = eval_tables["overall_summary"].copy()
+    overall["xgb_profile"] = xgb_profile
+    gated_overall = gated_eval_tables["overall_summary"].copy()
+    gated_overall["xgb_profile"] = xgb_profile
+    route_decisions["xgb_profile"] = xgb_profile
+
+    cluster_mae = overall.loc[
+        overall["model"].eq(f"validation_cluster_{settings['model_name']}"),
+        "mean_mae",
+    ].iloc[0]
+    global_mae = overall.loc[
+        overall["model"].eq(f"validation_global_{settings['model_name']}"),
+        "mean_mae",
+    ].iloc[0]
+    gated_mae = gated_overall.loc[
+        gated_overall["model"].eq(f"validation_gated_cluster_{settings['model_name']}"),
+        "mean_mae",
+    ].iloc[0]
+
+    summary = pd.DataFrame(
+        [
+            {
+                "xgb_profile": xgb_profile,
+                "validation_days": validation_days,
+                "validation_start": valid_cols[0],
+                "validation_end": valid_cols[-1],
+                "global_mae": global_mae,
+                "cluster_mae": cluster_mae,
+                "gated_cluster_mae": gated_mae,
+                "selected_score": gated_mae
+                if _get_setting(settings, "cluster_gating_enabled", True)
+                else cluster_mae,
+                "n_features": len(feature_cols),
+                "n_trained_cluster_models": len(cluster_fits),
+                "n_allowed_cluster_models": len(allowed_groups),
+            }
+        ]
+    )
+
+    del train_df
+    del global_fit
+    del cluster_fits
+    gc.collect()
+    return {
+        "summary": summary,
+        "overall": overall,
+        "gated_overall": gated_overall,
+        "route_decisions": route_decisions,
+        "allowed_groups": allowed_groups,
+        "feature_cols": feature_cols,
+    }
+
+
+def select_xgb_profile(train_23, cluster_labels, static_features, settings):
+    if not _get_setting(settings, "recursive_validation_enabled", True):
+        return _get_setting(settings, "xgb_profile", "regularized"), [], None
+
+    profiles = _get_setting(settings, "xgb_profiles", None)
+    if not profiles:
+        profiles = [_get_setting(settings, "xgb_profile", "regularized")]
+
+    validation_results = []
+    for profile in profiles:
+        validation_results.append(
+            run_recursive_validation(
+                train_23=train_23,
+                cluster_labels=cluster_labels,
+                static_features=static_features,
+                settings=settings,
+                xgb_profile=profile,
+            )
+        )
+
+    summary = pd.concat([result["summary"] for result in validation_results], ignore_index=True)
+    best_profile = summary.sort_values("selected_score").iloc[0]["xgb_profile"]
+    best_result = next(result for result in validation_results if result["summary"].iloc[0]["xgb_profile"] == best_profile)
+    return best_profile, validation_results, best_result["allowed_groups"]
+
+
 def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
     import matplotlib.pyplot as plt
 
@@ -63,24 +309,43 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         random_state=settings["random_state"],
     )
 
-    train_df = make_training_frame(
+    best_xgb_profile, validation_results, allowed_groups = select_xgb_profile(
+        train_23=train_23,
+        cluster_labels=cluster_labels,
+        static_features=static_features,
+        settings=settings,
+    )
+    if not _get_setting(settings, "cluster_gating_enabled", True):
+        allowed_groups = None
+
+    model_static_features = _prepare_model_static_features(
         train_wide=train_23,
         cluster_labels=cluster_labels,
         static_features=static_features,
+        settings=settings,
+    )
+    seasonal_prior_store = _prepare_seasonal_prior_store(train_23, cluster_labels, settings)
+
+    train_df = make_training_frame(
+        train_wide=train_23,
+        cluster_labels=cluster_labels,
+        static_features=model_static_features,
         show_progress=True,
+        include_profile_features=False,
+        include_seasonal_priors=_get_setting(settings, "include_seasonal_priors", True),
     )
     train_frame_shape = list(train_df.shape)
-    feature_cols = [
-        col for col in train_df.columns
-        if col not in ["ID", "ds", "ForecastGroup", "target"]
-    ]
+    feature_cols = _build_feature_cols(train_df)
     future_dates = pd.to_datetime(test_24.columns[1:])
+    model_params = _get_setting(settings, "xgb_params", None)
 
     global_fit = fit_global_model(
         train_df=train_df,
         feature_cols=feature_cols,
         model_name=settings["model_name"],
         use_gpu=settings["gpu_enabled"],
+        model_params=model_params,
+        xgb_profile=best_xgb_profile,
         verbose=50,
     )
     cluster_fits = fit_cluster_models(
@@ -90,6 +355,8 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         min_households=settings["min_cluster_households"],
         min_rows=settings["min_cluster_rows"],
         use_gpu=settings["gpu_enabled"],
+        model_params=model_params,
+        xgb_profile=best_xgb_profile,
         show_progress=True,
         verbose=False,
     )
@@ -101,7 +368,9 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         train_23_wide=train_23,
         future_dates=future_dates,
         model=global_fit["model"],
-        static_features=static_features,
+        cluster_labels=cluster_labels,
+        static_features=model_static_features,
+        seasonal_prior_store=seasonal_prior_store,
         show_progress=True,
         feature_cols=feature_cols,
     )
@@ -111,7 +380,9 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         future_dates=future_dates,
         group_models=cluster_fits,
         fallback_model=global_fit["model"],
-        static_features=static_features,
+        allowed_groups=allowed_groups,
+        static_features=model_static_features,
+        seasonal_prior_store=seasonal_prior_store,
         show_progress=True,
         feature_cols=feature_cols,
     )
@@ -121,9 +392,17 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         pred_cluster_wide=pred_cluster,
         truth_wide=test_24,
         cluster_labels=cluster_labels,
-        trained_groups=cluster_fits.keys(),
+        trained_groups=allowed_groups if allowed_groups is not None else cluster_fits.keys(),
         global_model_label=f"global_{settings['model_name']}",
         cluster_model_label=f"cluster_{settings['model_name']}",
+    )
+
+    monthly_summary = pd.concat(
+        [
+            monthly_error_summary(pred_global, test_24, f"global_{settings['model_name']}"),
+            monthly_error_summary(pred_cluster, test_24, f"cluster_{settings['model_name']}"),
+        ],
+        ignore_index=True,
     )
 
     sampled_households, fig = plot_sample_households_by_group(
@@ -154,10 +433,29 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         "cluster_mae_summary": eval_tables["cluster_mae_summary"],
         "compare_detail": eval_tables["compare_detail"],
         "cluster_compare_summary": eval_tables["cluster_compare_summary"],
+        "monthly_error_summary": monthly_summary,
     }
     for table_name, df in metric_frames.items():
         df.assign(experiment_name=exp_config["experiment_name"]).to_csv(
             exp_dirs["metrics"] / f"{table_name}.csv",
+            index=False,
+        )
+
+    if validation_results:
+        validation_summary = pd.concat(
+            [result["summary"] for result in validation_results],
+            ignore_index=True,
+        )
+        validation_route_decisions = pd.concat(
+            [result["route_decisions"] for result in validation_results],
+            ignore_index=True,
+        )
+        validation_summary.assign(experiment_name=exp_config["experiment_name"]).to_csv(
+            exp_dirs["metrics"] / "recursive_validation_summary.csv",
+            index=False,
+        )
+        validation_route_decisions.assign(experiment_name=exp_config["experiment_name"]).to_csv(
+            exp_dirs["metrics"] / "cluster_route_decisions.csv",
             index=False,
         )
 
@@ -169,6 +467,13 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         "static_features_path": exp_config.get("static_features_path"),
         "model_name": settings["model_name"],
         "gpu_enabled": settings["gpu_enabled"],
+        "xgb_profile": best_xgb_profile,
+        "xgb_params": model_params or {},
+        "xgb_profiles_considered": _get_setting(settings, "xgb_profiles", [_get_setting(settings, "xgb_profile", "regularized")]),
+        "recursive_validation_enabled": _get_setting(settings, "recursive_validation_enabled", True),
+        "cluster_gating_enabled": _get_setting(settings, "cluster_gating_enabled", True),
+        "include_profile_features": _get_setting(settings, "include_profile_features", True),
+        "include_seasonal_priors": _get_setting(settings, "include_seasonal_priors", True),
         "debug": settings["debug"],
         "debug_frac": settings["debug_frac"],
         "random_state": settings["random_state"],
@@ -178,7 +483,9 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         "feature_cols": feature_cols,
         "n_feature_cols": len(feature_cols),
         "trained_groups": sorted(map(str, cluster_fits.keys())),
+        "allowed_cluster_groups": sorted(map(str, allowed_groups)) if allowed_groups is not None else None,
         "n_trained_cluster_models": len(cluster_fits),
+        "n_allowed_cluster_models": len(allowed_groups) if allowed_groups is not None else None,
         "global_fit_metadata": global_fit["metadata"],
         "cluster_fit_metadata": {
             str(group): fit["metadata"] for group, fit in cluster_fits.items()
@@ -199,6 +506,7 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
     del test_24
     del cluster_labels
     del static_features
+    del model_static_features
     del pred_global
     del pred_cluster
     del eval_tables

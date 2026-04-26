@@ -1,8 +1,66 @@
 from tqdm.auto import tqdm
 import numpy as np
 
+XGB_PARAMETER_PROFILES = {
+    "baseline": dict(
+        n_estimators=400,
+        learning_rate=0.05,
+        max_depth=8,
+        min_child_weight=1.0,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=0.0,
+        reg_lambda=1.0,
+    ),
+    "regularized": dict(
+        n_estimators=700,
+        learning_rate=0.035,
+        max_depth=6,
+        min_child_weight=5.0,
+        subsample=0.85,
+        colsample_bytree=0.85,
+        reg_alpha=0.05,
+        reg_lambda=3.0,
+    ),
+    "shallow": dict(
+        n_estimators=900,
+        learning_rate=0.03,
+        max_depth=4,
+        min_child_weight=10.0,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        reg_alpha=0.1,
+        reg_lambda=5.0,
+    ),
+    "deeper": dict(
+        n_estimators=600,
+        learning_rate=0.04,
+        max_depth=10,
+        min_child_weight=3.0,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=0.02,
+        reg_lambda=2.0,
+    ),
+}
 
-def get_model(model_name: str, random_state: int = 42, use_gpu: bool = False):
+
+def resolve_xgb_params(profile: str = "regularized", overrides: dict | None = None) -> dict:
+    if profile not in XGB_PARAMETER_PROFILES:
+        raise ValueError(f"Unknown xgb profile {profile!r}. Available: {sorted(XGB_PARAMETER_PROFILES)}")
+    params = dict(XGB_PARAMETER_PROFILES[profile])
+    if overrides:
+        params.update(overrides)
+    return params
+
+
+def get_model(
+    model_name: str,
+    random_state: int = 42,
+    use_gpu: bool = False,
+    model_params: dict | None = None,
+    xgb_profile: str = "regularized",
+):
     model_name = model_name.lower()
 
     if model_name == "lgbm":
@@ -27,15 +85,11 @@ def get_model(model_name: str, random_state: int = 42, use_gpu: bool = False):
 
         params = dict(
             objective="reg:absoluteerror",
-            n_estimators=400,
-            learning_rate=0.05,
-            max_depth=8,
-            subsample=0.8,
-            colsample_bytree=0.8,
             tree_method="hist",
             random_state=random_state,
             verbosity=1,
         )
+        params.update(resolve_xgb_params(profile=xgb_profile, overrides=model_params))
         if use_gpu:
             params["device"] = "cuda"
         return XGBRegressor(**params)
@@ -98,9 +152,16 @@ def fit_global_model(
     feature_cols,
     model_name="lgbm",
     use_gpu=False,
+    model_params=None,
+    xgb_profile="regularized",
     verbose=50,
 ):
-    model = get_model(model_name, use_gpu=use_gpu)
+    model = get_model(
+        model_name,
+        use_gpu=use_gpu,
+        model_params=model_params,
+        xgb_profile=xgb_profile,
+    )
 
     split_ds = _split_train_valid(train_df)
     train_mask = train_df["ds"] < split_ds
@@ -128,7 +189,11 @@ def fit_global_model(
         feature_cols=feature_cols,
         model_name=model_name,
         use_gpu=use_gpu,
-        extra={"scope": "global"},
+        extra={
+            "scope": "global",
+            "xgb_profile": xgb_profile if model_name.lower() == "xgb" else None,
+            "model_params": model_params or {},
+        },
     )
 
     return {
@@ -145,6 +210,8 @@ def fit_cluster_models(
     min_households=30,
     min_rows=500,
     use_gpu=False,
+    model_params=None,
+    xgb_profile="regularized",
     show_progress=True,
     verbose=False,
 ):
@@ -182,7 +249,12 @@ def fit_cluster_models(
         if len(train_part) < min_rows or len(valid_part) == 0:
             continue
 
-        model = get_model(model_name, use_gpu=use_gpu)
+        model = get_model(
+            model_name,
+            use_gpu=use_gpu,
+            model_params=model_params,
+            xgb_profile=xgb_profile,
+        )
 
         X_train = grp.loc[train_mask, feature_cols]
         y_train = grp.loc[train_mask, "target"].to_numpy(copy=False)
@@ -211,6 +283,8 @@ def fit_cluster_models(
                 "forecast_group": str(group),
                 "n_households": n_households,
                 "n_rows": n_rows,
+                "xgb_profile": xgb_profile if model_name.lower() == "xgb" else None,
+                "model_params": model_params or {},
             },
         )
 
