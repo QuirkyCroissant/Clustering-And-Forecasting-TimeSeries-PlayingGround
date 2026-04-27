@@ -9,6 +9,8 @@
 !data/**
 !src
 !src/**
+!outputs/
+!outputs/**
 **/.ipynb_checkpoints/
 **/__pycache__/
 *.egg-info/

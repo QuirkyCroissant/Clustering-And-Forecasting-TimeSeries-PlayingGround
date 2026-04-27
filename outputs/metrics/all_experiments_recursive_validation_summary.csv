@@ -1,0 +1,4 @@
+xgb_profile,validation_days,validation_start,validation_end,global_mae,cluster_mae,gated_cluster_mae,selected_score,n_features,n_trained_cluster_models,n_allowed_cluster_models,experiment_name
+regularized,60,2023-11-02,2023-12-31,4.480757161145246,4.552853581702567,4.463631421017245,4.463631421017245,80,9,4,case5_base
+shallow,60,2023-11-02,2023-12-31,4.4143103611292,4.474052801218626,4.358093291708947,4.358093291708947,80,9,4,case5_base
+deeper,60,2023-11-02,2023-12-31,4.49237226406157,4.528206857266443,4.466792503972314,4.466792503972314,80,9,3,case5_base
