@@ -19,6 +19,8 @@ from .train import fit_cluster_models, fit_global_model
 
 
 def maybe_apply_debug_subset(train_23, test_24, cluster_labels, static_features, debug, debug_frac, random_state):
+    """Reduce all aligned inputs to a sampled household subset for quick debug runs."""
+    
     if not debug:
         return train_23, test_24, cluster_labels, static_features
 
@@ -37,26 +39,36 @@ def maybe_apply_debug_subset(train_23, test_24, cluster_labels, static_features,
 
 
 def write_json(path: Path, payload):
+    """Write structured metadata to JSON with readable formatting."""
+
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
 
 def _get_setting(settings: dict, key: str, default):
+    """Read an optional setting and fall back to the provided default."""
+
     return settings[key] if key in settings else default
 
 
 def _prepare_model_static_features(train_wide, cluster_labels, static_features, settings):
+    """Build the static feature table that should be passed into the forecasting model."""
+
     if _get_setting(settings, "include_profile_features", True):
         return merge_static_features(train_wide, cluster_labels, static_features)
     return static_features
 
 
 def _prepare_seasonal_prior_store(train_wide, cluster_labels, settings):
+    """Build seasonal priors only when the experiment configuration asks for them."""
+
     if not _get_setting(settings, "include_seasonal_priors", True):
         return None
     return make_seasonal_prior_store(train_wide, cluster_labels)
 
 
 def _build_feature_cols(train_df):
+    """Derive model feature columns by dropping identifiers and targets."""
+
     return [
         col for col in train_df.columns
         if col not in ["ID", "ds", "ForecastGroup", "target"]
@@ -64,6 +76,8 @@ def _build_feature_cols(train_df):
 
 
 def _route_decisions_from_compare(compare_summary, margin=0.0):
+    """Turn validation deltas into keep-cluster versus fallback-to-global decisions."""
+
     if compare_summary.empty:
         return pd.DataFrame(
             columns=[
@@ -86,6 +100,8 @@ def _route_decisions_from_compare(compare_summary, margin=0.0):
 
 
 def _allowed_groups(route_decisions):
+    """Extract the ForecastGroups that are allowed to keep a dedicated cluster model."""
+
     if route_decisions.empty or "use_cluster_model" not in route_decisions.columns:
         return set()
     return set(
@@ -103,6 +119,8 @@ def run_recursive_validation(
     settings,
     xgb_profile,
 ):
+    """Run the recursive holdout validation used to choose profile and routing behaviour."""
+
     validation_days = int(_get_setting(settings, "recursive_validation_days", 60))
     date_cols = [c for c in train_23.columns if c != "ID"]
     if validation_days >= len(date_cols) - 2:
@@ -261,6 +279,8 @@ def run_recursive_validation(
 
 
 def select_xgb_profile(train_23, cluster_labels, static_features, settings):
+    """Evaluate the candidate XGB profiles and return the best one by validation score."""
+
     if not _get_setting(settings, "recursive_validation_enabled", True):
         return _get_setting(settings, "xgb_profile", "regularized"), [], None
 
@@ -287,6 +307,8 @@ def select_xgb_profile(train_23, cluster_labels, static_features, settings):
 
 
 def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
+    """Run one forecasting experiment end to end and persist all resulting artefacts."""
+
     import matplotlib.pyplot as plt
 
     repo_root = Path(repo_root)
@@ -515,6 +537,8 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
 
 
 def main():
+    """CLI entry point for isolated experiment subprocess runs."""
+    
     parser = argparse.ArgumentParser(description="Run one forecasting experiment in an isolated process.")
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--config-json", required=True)

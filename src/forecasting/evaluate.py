@@ -3,6 +3,8 @@ import pandas as pd
 
 
 def mae_by_household(pred_wide: pd.DataFrame, truth_wide: pd.DataFrame) -> pd.DataFrame:
+    """Compute one MAE value per household after aligning ids and common forecast days."""
+    
     pred = pred_wide.copy()
     truth = truth_wide.copy()
 
@@ -19,6 +21,8 @@ def mae_by_household(pred_wide: pd.DataFrame, truth_wide: pd.DataFrame) -> pd.Da
 
 
 def summarise_mae(mae_df: pd.DataFrame, metric_col: str = "MAE") -> pd.DataFrame:
+    """Reduce household errors to the overall MAE statistics used in the report."""
+    
     return pd.DataFrame(
         {
             "n_households": [len(mae_df)],
@@ -34,6 +38,8 @@ def monthly_error_summary(
     truth_wide: pd.DataFrame,
     model_label: str,
 ) -> pd.DataFrame:
+    """Summarise monthly error, bias, and mean consumption for one forecast output."""
+    
     pred = pred_wide.copy().rename(columns={pred_wide.columns[0]: "ID"})
     truth = truth_wide.copy().rename(columns={truth_wide.columns[0]: "ID"})
     pred = pred.set_index("ID").sort_index()
@@ -62,6 +68,8 @@ def monthly_error_summary(
 
 
 def get_cluster_metadata_columns(cluster_labels: pd.DataFrame) -> list[str]:
+    """Return the cluster metadata columns worth carrying into detail tables."""
+
     meta_cols = ["ID"]
     for col in ["ForecastGroup", "RefinedCluster", "SparsityBucket", "SparsityGroup"]:
         if col in cluster_labels.columns and col not in meta_cols:
@@ -70,6 +78,8 @@ def get_cluster_metadata_columns(cluster_labels: pd.DataFrame) -> list[str]:
 
 
 def get_cluster_group_columns(cluster_labels: pd.DataFrame) -> list[str]:
+    """Return the columns that define a forecasting group in grouped summaries."""
+
     group_cols = ["ForecastGroup"]
     for col in ["RefinedCluster", "SparsityBucket", "SparsityGroup"]:
         if col in cluster_labels.columns and col not in group_cols:
@@ -78,6 +88,8 @@ def get_cluster_group_columns(cluster_labels: pd.DataFrame) -> list[str]:
 
 
 def attach_cluster_metadata(mae_df: pd.DataFrame, cluster_labels: pd.DataFrame) -> pd.DataFrame:
+    """Join clustering metadata onto household-level MAE rows."""
+
     meta_cols = get_cluster_metadata_columns(cluster_labels)
     cluster_meta = cluster_labels[meta_cols].drop_duplicates().copy()
     cluster_meta["ID"] = cluster_meta["ID"].astype(str)
@@ -92,6 +104,8 @@ def assign_model_routes(
     trained_groups,
     group_col: str = "ForecastGroup",
 ) -> pd.DataFrame:
+    """Tag each household with the route that produced its cluster forecast."""
+
     detail = mae_cluster_detail.copy()
     trained_groups = {str(group) for group in trained_groups}
     detail[group_col] = detail[group_col].astype(str)
@@ -108,6 +122,8 @@ def assign_model_routes(
 
 
 def summarise_routes(mae_cluster_detail: pd.DataFrame) -> pd.DataFrame:
+    """Count how many households were served by each routing decision."""
+
     return (
         mae_cluster_detail.groupby("model_route")["ID"]
         .count()
@@ -123,6 +139,8 @@ def summarise_cluster_mae(
     group_cols: list[str],
     route_value: str = "trained_cluster_model",
 ) -> pd.DataFrame:
+    """Summarise MAE inside the groups that truly used dedicated cluster models."""
+
     filtered = mae_cluster_detail[mae_cluster_detail["model_route"] == route_value]
     if filtered.empty:
         return pd.DataFrame(
@@ -159,6 +177,8 @@ def compare_global_vs_cluster(
     cluster_labels: pd.DataFrame,
     route_value: str = "trained_cluster_model",
 ):
+    """Compare global and cluster MAE household by household, then aggregate the delta by group."""
+
     merge_cols = get_cluster_metadata_columns(cluster_labels)
     compare_detail = (
         mae_global_detail.rename(columns={"MAE": "MAE_global"})
@@ -210,6 +230,8 @@ def evaluate_global_and_cluster(
     global_model_label: str = "global_xgb",
     cluster_model_label: str = "cluster_xgb",
 ):
+    """Build the full evaluation bundle used by the forecasting notebooks."""
+
     mae_global = mae_by_household(pred_global_wide, truth_wide)
     mae_cluster = mae_by_household(pred_cluster_wide, truth_wide)
 
@@ -264,6 +286,8 @@ def plot_sample_households_by_group(
     max_groups: int | None = None,
     figsize_per_row=(14, 4),
 ):
+    """Plot a small sample per bucket and cluster so forecast behaviour can be inspected visually."""
+    
     import matplotlib.pyplot as plt
 
     train_df = train_23_wide.copy()
