@@ -16,7 +16,7 @@ Our report and final presentation use two clustering cases most heavily:
 Legacy and exploratory notebooks are still present in the repo, but the final workflows we recommend are:
 
 - [`notebooks/Clustering.ipynb`](notebooks/Clustering.ipynb)
-- [`notebooks/02_cluster_forecasting_lgbm_xgb.ipynb`](notebooks/02_cluster_forecasting_lgbm_xgb.ipynb)
+- [`notebooks/XGB_Orchestration.ipynb`](notebooks/XGB_Orchestration.ipynb)
 - [`notebooks/AGP.ipynb`](notebooks/AGP.ipynb)
 
 ## Final Submission Scope
@@ -113,7 +113,7 @@ Also note:
 
 Primary notebook:
 
-- [`notebooks/02_cluster_forecasting_lgbm_xgb.ipynb`](notebooks/02_cluster_forecasting_lgbm_xgb.ipynb)
+- [`notebooks/XGB_Orchestration.ipynb`](notebooks/XGB_Orchestration.ipynb)
 
 This notebook is the main orchestration layer for our XGB experiments. It calls helper code from `src/forecasting/`.
 
@@ -127,7 +127,7 @@ Historical execution setup:
 
 Practical recommendation for reproducing the final XGB run:
 
-1. Open or upload `notebooks/02_cluster_forecasting_lgbm_xgb.ipynb` in Kaggle.
+1. Open or upload `notebooks/XGB_Orchestration.ipynb` in Kaggle.
 1. Use a GPU notebook, ideally `P100`.
 1. Make sure the repository is available under the expected structure in `/kaggle/working/Clustering-And-Forecasting-TimeSeries-PlayingGround`.
 1. Make sure the clustering inputs exist, especially `case5_clusters.csv`.
@@ -217,7 +217,7 @@ If you only want the shortest path to our final results:
 
 1. Use the committed clustering outputs, especially `case2_clusters.csv` and `case5_clusters.csv`.
 1. Do not rerun shapelet generation unless you intentionally want a fresh variant.
-1. Run `notebooks/02_cluster_forecasting_lgbm_xgb.ipynb` in Kaggle with a `P100` GPU for the XGB workflow.
+1. Run `notebooks/XGB_Orchestration.ipynb` in Kaggle with a `P100` GPU for the XGB workflow.
 1. Run `notebooks/AGP.ipynb` for the AGP workflow.
 1. Compare against the tracked outputs in `outputs/` and the saved report-aligned artifacts in `notebooks/outputs/`.
 
