@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 
 
-def mae_by_household(pred_wide: pd.DataFrame, truth_wide: pd.DataFrame) -> pd.DataFrame:
-    """Compute one MAE value per household after aligning ids and common forecast days."""
+def error_by_household(pred_wide: pd.DataFrame, truth_wide: pd.DataFrame) -> pd.DataFrame:
+    """Compute household-level MAE and MAPE after aligning ids and forecast days."""
     
     pred = pred_wide.copy()
     truth = truth_wide.copy()
@@ -15,56 +15,36 @@ def mae_by_household(pred_wide: pd.DataFrame, truth_wide: pd.DataFrame) -> pd.Da
     truth = truth.set_index("ID").sort_index()
 
     common_cols = [c for c in truth.columns if c in pred.columns]
-    mae = (truth[common_cols] - pred[common_cols]).abs().mean(axis=1)
+    abs_error = (truth[common_cols] - pred[common_cols]).abs()
+    mae = abs_error.mean(axis=1)
 
-    return mae.rename("MAE").reset_index()
+    # MAPE is undefined when the actual value is zero, so those days are skipped.
+    denominator = truth[common_cols].abs().replace(0, np.nan)
+    mape = (abs_error / denominator).mean(axis=1) * 100
+
+    return pd.concat(
+        [
+            mae.rename("MAE"),
+            mape.rename("MAPE"),
+        ],
+        axis=1,
+    ).reset_index()
 
 
-def summarise_mae(mae_df: pd.DataFrame, metric_col: str = "MAE") -> pd.DataFrame:
-    """Reduce household errors to the overall MAE statistics used in the report."""
+def summarise_errors(error_df: pd.DataFrame) -> pd.DataFrame:
+    """Reduce household errors to the overall statistics used in the report."""
     
     return pd.DataFrame(
         {
-            "n_households": [len(mae_df)],
-            "mean_mae": [mae_df[metric_col].mean()],
-            "median_mae": [mae_df[metric_col].median()],
-            "std_mae": [mae_df[metric_col].std()],
+            "n_households": [len(error_df)],
+            "mean_mae": [error_df["MAE"].mean()],
+            "median_mae": [error_df["MAE"].median()],
+            "std_mae": [error_df["MAE"].std()],
+            "mean_mape": [error_df["MAPE"].mean()],
+            "median_mape": [error_df["MAPE"].median()],
+            "std_mape": [error_df["MAPE"].std()],
         }
     )
-
-
-def monthly_error_summary(
-    pred_wide: pd.DataFrame,
-    truth_wide: pd.DataFrame,
-    model_label: str,
-) -> pd.DataFrame:
-    """Summarise monthly error, bias, and mean consumption for one forecast output."""
-    
-    pred = pred_wide.copy().rename(columns={pred_wide.columns[0]: "ID"})
-    truth = truth_wide.copy().rename(columns={truth_wide.columns[0]: "ID"})
-    pred = pred.set_index("ID").sort_index()
-    truth = truth.set_index("ID").sort_index()
-
-    common_cols = [c for c in truth.columns if c in pred.columns]
-    rows = []
-    for month, month_cols in pd.Series(common_cols).groupby(
-        pd.to_datetime(common_cols).month
-    ):
-        cols = list(month_cols)
-        errors = pred[cols] - truth[cols]
-        rows.append(
-            {
-                "month": int(month),
-                "n_days": len(cols),
-                "n_households": len(truth),
-                "mae": errors.abs().to_numpy().mean(),
-                "bias_pred_minus_actual": errors.to_numpy().mean(),
-                "actual_mean": truth[cols].to_numpy().mean(),
-                "pred_mean": pred[cols].to_numpy().mean(),
-                "model": model_label,
-            }
-        )
-    return pd.DataFrame(rows)
 
 
 def get_cluster_metadata_columns(cluster_labels: pd.DataFrame) -> list[str]:
@@ -121,69 +101,22 @@ def assign_model_routes(
     return detail
 
 
-def summarise_routes(mae_cluster_detail: pd.DataFrame) -> pd.DataFrame:
-    """Count how many households were served by each routing decision."""
-
-    return (
-        mae_cluster_detail.groupby("model_route")["ID"]
-        .count()
-        .rename("n_households")
-        .reset_index()
-        .sort_values("model_route")
-        .reset_index(drop=True)
-    )
-
-
-def summarise_cluster_mae(
-    mae_cluster_detail: pd.DataFrame,
-    group_cols: list[str],
-    route_value: str = "trained_cluster_model",
-) -> pd.DataFrame:
-    """Summarise MAE inside the groups that truly used dedicated cluster models."""
-
-    filtered = mae_cluster_detail[mae_cluster_detail["model_route"] == route_value]
-    if filtered.empty:
-        return pd.DataFrame(
-            columns=group_cols + [
-                "n_households",
-                "mean_mae",
-                "median_mae",
-                "std_mae",
-                "min_mae",
-                "max_mae",
-            ]
-        )
-
-    return (
-        filtered.groupby(group_cols, dropna=False)["MAE"]
-        .agg(
-            n_households="size",
-            mean_mae="mean",
-            median_mae="median",
-            std_mae="std",
-            min_mae="min",
-            max_mae="max",
-        )
-        .reset_index()
-        .sort_values("mean_mae")
-        .reset_index(drop=True)
-    )
-
-
 def compare_global_vs_cluster(
     mae_global_detail: pd.DataFrame,
     mae_cluster_detail: pd.DataFrame,
     group_cols: list[str],
     cluster_labels: pd.DataFrame,
     route_value: str = "trained_cluster_model",
-):
+) -> pd.DataFrame:
     """Compare global and cluster MAE household by household, then aggregate the delta by group."""
 
     merge_cols = get_cluster_metadata_columns(cluster_labels)
     compare_detail = (
-        mae_global_detail.rename(columns={"MAE": "MAE_global"})
+        mae_global_detail[merge_cols + ["MAE"]]
+        .rename(columns={"MAE": "MAE_global"})
         .merge(
-            mae_cluster_detail.rename(columns={"MAE": "MAE_cluster"}),
+            mae_cluster_detail[merge_cols + ["MAE", "model_route"]]
+            .rename(columns={"MAE": "MAE_cluster"}),
             on=merge_cols,
             how="inner",
         )
@@ -218,7 +151,7 @@ def compare_global_vs_cluster(
             .reset_index(drop=True)
         )
 
-    return compare_detail, summary
+    return summary
 
 
 def evaluate_global_and_cluster(
@@ -232,28 +165,23 @@ def evaluate_global_and_cluster(
 ):
     """Build the full evaluation bundle used by the forecasting notebooks."""
 
-    mae_global = mae_by_household(pred_global_wide, truth_wide)
-    mae_cluster = mae_by_household(pred_cluster_wide, truth_wide)
+    error_global = error_by_household(pred_global_wide, truth_wide)
+    error_cluster = error_by_household(pred_cluster_wide, truth_wide)
 
     overall_summary = pd.concat(
         [
-            summarise_mae(mae_global).assign(model=global_model_label),
-            summarise_mae(mae_cluster).assign(model=cluster_model_label),
+            summarise_errors(error_global).assign(model=global_model_label),
+            summarise_errors(error_cluster).assign(model=cluster_model_label),
         ],
         ignore_index=True,
     )
 
-    mae_global_detail = attach_cluster_metadata(mae_global, cluster_labels)
-    mae_cluster_detail = attach_cluster_metadata(mae_cluster, cluster_labels)
+    mae_global_detail = attach_cluster_metadata(error_global, cluster_labels)
+    mae_cluster_detail = attach_cluster_metadata(error_cluster, cluster_labels)
     mae_cluster_detail = assign_model_routes(mae_cluster_detail, trained_groups=trained_groups)
 
-    route_summary = summarise_routes(mae_cluster_detail)
     group_cols = get_cluster_group_columns(cluster_labels)
-    cluster_mae_summary = summarise_cluster_mae(
-        mae_cluster_detail=mae_cluster_detail,
-        group_cols=group_cols,
-    )
-    compare_detail, cluster_compare_summary = compare_global_vs_cluster(
+    cluster_compare_summary = compare_global_vs_cluster(
         mae_global_detail=mae_global_detail,
         mae_cluster_detail=mae_cluster_detail,
         group_cols=group_cols,
@@ -262,13 +190,8 @@ def evaluate_global_and_cluster(
 
     return {
         "overall_summary": overall_summary,
-        "mae_global_detail": mae_global_detail,
         "mae_cluster_detail": mae_cluster_detail,
-        "route_summary": route_summary,
-        "cluster_mae_summary": cluster_mae_summary,
-        "compare_detail": compare_detail,
         "cluster_compare_summary": cluster_compare_summary,
-        "group_cols": group_cols,
     }
 
 
