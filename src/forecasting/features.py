@@ -62,16 +62,21 @@ SEASONAL_PRIOR_FEATURES = [
 
 
 def _safe_ratio(num: np.ndarray, denom: np.ndarray) -> np.ndarray:
+    """Divide two arrays while protecting against near-zero denominators."""
+
     return num / np.where(np.abs(denom) < 1e-6, 1.0, denom)
 
 
 def _mean_by_mask(values: np.ndarray, mask: np.ndarray, fallback: np.ndarray) -> np.ndarray:
+    """Average over a masked subset of days and fall back when the mask is empty."""
+
     if not np.any(mask):
         return fallback
     return values[:, mask].mean(axis=1)
 
 
 def _trend(values: np.ndarray) -> np.ndarray:
+    """Estimate a simple per-household linear trend over the available history."""
     n_days = values.shape[1]
     x = np.arange(n_days, dtype=np.float32)
     x = x - x.mean()
@@ -83,6 +88,8 @@ def _trend(values: np.ndarray) -> np.ndarray:
 
 
 def _forecast_group_code(value) -> float:
+    """Map textual forecast groups to stable numeric codes for tree models."""
+
     if pd.isna(value) or value == "unknown":
         return -2.0
     if value == "inactive":
@@ -94,6 +101,8 @@ def _forecast_group_code(value) -> float:
 
 
 def make_time_features(ds: pd.Timestamp) -> dict:
+    """Build calendar and cyclic time features for one target day."""
+
     dow = ds.dayofweek
     month = ds.month
     doy = ds.dayofyear
@@ -115,6 +124,8 @@ def make_time_features(ds: pd.Timestamp) -> dict:
 
 
 def make_history_features(history: np.ndarray, ds: pd.Timestamp) -> dict:
+    """Build one forecast row from a single household history buffer."""
+
     history = np.asarray(history, dtype=float)
     feats = make_time_features(ds)
 
@@ -135,6 +146,8 @@ def make_history_features(history: np.ndarray, ds: pd.Timestamp) -> dict:
 
 
 def _precompute_time_feature_arrays(dates: pd.DatetimeIndex) -> dict[str, np.ndarray]:
+    """Precompute time features for every trainable day to avoid repeated work."""
+
     target_dates = dates[MAX_LAG:]
     dow = target_dates.dayofweek.to_numpy(dtype=np.float32, copy=False)
     month = target_dates.month.to_numpy(dtype=np.float32, copy=False)
@@ -157,6 +170,8 @@ def _precompute_time_feature_arrays(dates: pd.DatetimeIndex) -> dict[str, np.nda
 
 
 def make_profile_features(train_wide: pd.DataFrame, cluster_labels: pd.DataFrame) -> pd.DataFrame:
+    """Build household profile statistics and append the routing fields used later by forecasting."""
+
     date_cols = [c for c in train_wide.columns if c != "ID"]
     dates = pd.DatetimeIndex(pd.to_datetime(date_cols))
     values = train_wide[date_cols].to_numpy(dtype=np.float32, copy=True)
@@ -214,6 +229,8 @@ def make_profile_features(train_wide: pd.DataFrame, cluster_labels: pd.DataFrame
 
 
 def make_seasonal_prior_store(train_wide: pd.DataFrame, cluster_labels: pd.DataFrame) -> dict:
+    """Precompute global, cluster, and household seasonal averages for reuse during forecasting."""
+
     date_cols = [c for c in train_wide.columns if c != "ID"]
     dates = pd.DatetimeIndex(pd.to_datetime(date_cols))
     values = train_wide[date_cols].to_numpy(dtype=np.float32, copy=True)
@@ -292,6 +309,8 @@ def _seasonal_prior_arrays(
     dates: pd.DatetimeIndex,
     store: dict,
 ) -> dict[str, np.ndarray]:
+    """Expand seasonal prior lookups into row-aligned arrays for one training chunk."""
+
     n_households = len(ids)
     n_dates = len(dates)
     month = dates.month.to_numpy()
@@ -340,6 +359,8 @@ def merge_static_features(
     cluster_labels: pd.DataFrame,
     static_features: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+    """Merge generated profile features with optional external static features into one table."""
+
     generated = make_profile_features(train_wide, cluster_labels)
     if static_features is None:
         return generated
@@ -350,6 +371,7 @@ def merge_static_features(
 
 
 def _repeat_static_chunk(static_chunk: np.ndarray, rows_per_household: int, static_cols: list[str]) -> dict:
+    """Repeat household-level static features so each daily row keeps the same household profile."""
     repeated = {}
     for idx, col in enumerate(static_cols):
         repeated[col] = np.repeat(static_chunk[:, idx], rows_per_household).astype(np.float32, copy=False)
@@ -365,6 +387,7 @@ def _build_training_chunk(
     static_features: pd.DataFrame | None,
     seasonal_prior_store: dict | None,
 ):
+    """Convert one chunk of wide household histories into supervised daily training rows."""
     ids = train_chunk["ID"].to_numpy(copy=False)
     y_values = train_chunk[date_cols].to_numpy(dtype=np.float32, copy=True)
     n_households, n_days = y_values.shape
@@ -463,6 +486,8 @@ def make_training_frame(
     include_profile_features: bool = True,
     include_seasonal_priors: bool = True,
 ) -> pd.DataFrame:
+    """Transform the full wide 2023 history into the tabular frame used by XGB-style models."""
+    
     date_cols = [c for c in train_wide.columns if c != "ID"]
     dates = pd.DatetimeIndex(pd.to_datetime(date_cols))
     group_map = cluster_labels.set_index("ID")["ForecastGroup"].to_dict()

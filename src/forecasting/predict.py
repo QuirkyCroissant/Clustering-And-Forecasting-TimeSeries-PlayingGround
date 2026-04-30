@@ -30,6 +30,8 @@ HISTORY_FEATURE_ORDER = (
 
 
 def _prepare_base_arrays(train_23_wide: pd.DataFrame):
+    """Extract household ids and the raw history matrix from the wide 2023 table."""
+
     date_cols = [c for c in train_23_wide.columns if c != "ID"]
     ids = train_23_wide["ID"].to_numpy()
     hist0 = train_23_wide[date_cols].to_numpy(dtype=np.float32, copy=True)
@@ -37,6 +39,8 @@ def _prepare_base_arrays(train_23_wide: pd.DataFrame):
 
 
 def _prepare_future_date_features(future_dates):
+    """Precompute calendar features for each future forecast date."""
+
     future_dates = pd.to_datetime(pd.Index(future_dates))
 
     dow = future_dates.dayofweek.to_numpy()
@@ -61,6 +65,8 @@ def _prepare_future_date_features(future_dates):
 
 
 def _prepare_static_df(ids: np.ndarray, static_features: pd.DataFrame | None):
+    """Align optional static features to the household order used by the prediction arrays."""
+
     if static_features is None:
         return None, []
 
@@ -78,6 +84,8 @@ def _prepare_static_df(ids: np.ndarray, static_features: pd.DataFrame | None):
 
 
 def _default_feature_cols(static_cols: list[str]) -> list[str]:
+    """Build the default column order expected by the forecasting helpers."""
+
     return TIME_FEATURE_ORDER + HISTORY_FEATURE_ORDER + static_cols + SEASONAL_PRIOR_FEATURES
 
 
@@ -90,6 +98,8 @@ def _add_seasonal_prior_features(
     date_feature_store: dict,
     seasonal_prior_store: dict | None,
 ):
+    """Append seasonal prior values for one forecast day and one batch of households."""
+
     if seasonal_prior_store is None:
         return
 
@@ -163,6 +173,8 @@ def _build_feature_frame(
     seasonal_prior_store: dict | None = None,
     feature_cols: list[str] | None = None,
 ):
+    """Assemble the feature frame for one recursive forecast step."""
+
     row_idx = np.asarray(row_idx, dtype=np.int64)
     n_rows = len(row_idx)
 
@@ -217,6 +229,8 @@ def _build_feature_frame(
 
 
 def _to_output_df(ids: np.ndarray, preds: np.ndarray, future_dates) -> pd.DataFrame:
+    """Convert the prediction matrix back into the wide forecast format."""
+
     date_cols = [pd.Timestamp(d).strftime("%Y-%m-%d") for d in future_dates]
     out = pd.DataFrame(preds, columns=date_cols)
     out.insert(0, "ID", ids)
@@ -234,9 +248,12 @@ def forecast_global(
     feature_cols=None,
 ):
     """
-    Fast batched recursive forecasting for the global model.
-    One predict() call per forecast day instead of one per household-day.
+    Run fast recursive forecasting with one global model.
+
+    The function predicts one day at a time, but batches all active households
+    into one model call per day so the recursion stays efficient.
     """
+
     ids, _, hist0 = _prepare_base_arrays(train_23_wide)
     n_households, n_hist = hist0.shape
     horizon = len(future_dates)
@@ -321,9 +338,12 @@ def forecast_by_group(
     feature_cols=None,
 ):
     """
-    Fast batched recursive forecasting for cluster-specific models.
-    One predict() call per (group, day) batch.
+    Run fast recursive forecasting with cluster-specific models.
+
+    Each forecast day is processed group by group, with an optional global
+    fallback for groups that should not use their local model.
     """
+    
     ids, _, hist0 = _prepare_base_arrays(train_23_wide)
     n_households, n_hist = hist0.shape
     horizon = len(future_dates)
