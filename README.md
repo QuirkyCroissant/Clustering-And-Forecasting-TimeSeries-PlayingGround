@@ -207,7 +207,7 @@ On the current `main` branch, the cleanest reproducible story is:
 
 - The ensemble experiments are implemented in the notebook [notebooks/ensembleExperiment.ipynb](notebooks/ensembleExperiment.ipynb#L1). That notebook contains the original ensemble logic (use XGB predictions for IDs in large clusters and AGP for smaller clusters) and exploration of variants.
 - The helper script [src/forecasting/combine_predictions_case5.py](src/forecasting/combine_predictions_case5.py#L1) reproduces the simple "big-cluster XGB / small-cluster AGP" merging rule and can be used to create a Case-5 combined file (default `outputs/pred_combined_case5.csv`). Note: in our experiments this particular big-vs-small ensemble did not reliably improve performance over the weighted-average ensemble.
-- Ensemble-ready predictions (final, weighted-average forecasts used for submission/analysis) are available as [data/predictions/weighted_average_predictions.csv](data/predictions/weighted_average_predictions.csv#L1).
+- Final ensemble predictions (weighted-average forecasts and related exports) are bundled in [data/predictions/predictions.zip](data/predictions/predictions.zip#L1). Unzip this archive to access `weighted_average_predictions.csv` and other delivered prediction files.
 
 ## Minimal Reproduction Path
 
