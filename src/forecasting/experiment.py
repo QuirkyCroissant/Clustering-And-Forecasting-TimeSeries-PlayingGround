@@ -12,7 +12,7 @@ from .data import (
     load_static_features,
     load_wide_csv,
 )
-from .evaluate import evaluate_global_and_cluster, monthly_error_summary, plot_sample_households_by_group
+from .evaluate import evaluate_global_and_cluster, plot_sample_households_by_group
 from .features import make_seasonal_prior_store, make_training_frame, merge_static_features
 from .predict import forecast_by_group, forecast_global
 from .train import fit_cluster_models, fit_global_model
@@ -226,10 +226,7 @@ def run_recursive_validation(
     )
 
     overall = eval_tables["overall_summary"].copy()
-    overall["xgb_profile"] = xgb_profile
     gated_overall = gated_eval_tables["overall_summary"].copy()
-    gated_overall["xgb_profile"] = xgb_profile
-    route_decisions["xgb_profile"] = xgb_profile
 
     cluster_mae = overall.loc[
         overall["model"].eq(f"validation_cluster_{settings['model_name']}"),
@@ -270,11 +267,7 @@ def run_recursive_validation(
     gc.collect()
     return {
         "summary": summary,
-        "overall": overall,
-        "gated_overall": gated_overall,
-        "route_decisions": route_decisions,
         "allowed_groups": allowed_groups,
-        "feature_cols": feature_cols,
     }
 
 
@@ -380,7 +373,7 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         model_params=model_params,
         xgb_profile=best_xgb_profile,
         show_progress=True,
-        verbose=False,
+        verbose=50,
     )
 
     del train_df
@@ -419,14 +412,6 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
         cluster_model_label=f"cluster_{settings['model_name']}",
     )
 
-    monthly_summary = pd.concat(
-        [
-            monthly_error_summary(pred_global, test_24, f"global_{settings['model_name']}"),
-            monthly_error_summary(pred_cluster, test_24, f"cluster_{settings['model_name']}"),
-        ],
-        ignore_index=True,
-    )
-
     sampled_households, fig = plot_sample_households_by_group(
         train_23_wide=train_23,
         test_24_wide=test_24,
@@ -449,13 +434,6 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
 
     metric_frames = {
         "overall_summary": eval_tables["overall_summary"],
-        "mae_global_detail": eval_tables["mae_global_detail"],
-        "mae_cluster_detail": eval_tables["mae_cluster_detail"],
-        "route_summary": eval_tables["route_summary"],
-        "cluster_mae_summary": eval_tables["cluster_mae_summary"],
-        "compare_detail": eval_tables["compare_detail"],
-        "cluster_compare_summary": eval_tables["cluster_compare_summary"],
-        "monthly_error_summary": monthly_summary,
     }
     for table_name, df in metric_frames.items():
         df.assign(experiment_name=exp_config["experiment_name"]).to_csv(
@@ -468,16 +446,8 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
             [result["summary"] for result in validation_results],
             ignore_index=True,
         )
-        validation_route_decisions = pd.concat(
-            [result["route_decisions"] for result in validation_results],
-            ignore_index=True,
-        )
         validation_summary.assign(experiment_name=exp_config["experiment_name"]).to_csv(
             exp_dirs["metrics"] / "recursive_validation_summary.csv",
-            index=False,
-        )
-        validation_route_decisions.assign(experiment_name=exp_config["experiment_name"]).to_csv(
-            exp_dirs["metrics"] / "cluster_route_decisions.csv",
             index=False,
         )
 
@@ -516,11 +486,6 @@ def run_experiment(repo_root: Path, exp_config: dict, settings: dict):
     }
 
     write_json(exp_dirs["metadata"] / "experiment_metadata.json", experiment_metadata)
-    write_json(exp_dirs["metadata"] / "global_eval_log.json", global_fit["eval_log"])
-    write_json(
-        exp_dirs["metadata"] / "cluster_eval_logs.json",
-        {str(group): fit["eval_log"] for group, fit in cluster_fits.items()},
-    )
 
     del global_fit
     del cluster_fits
