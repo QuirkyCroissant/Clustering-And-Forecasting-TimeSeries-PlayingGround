@@ -13,7 +13,7 @@ Our report and final presentation use two clustering cases most heavily:
 - `Case 2`: best overall clustering result,
 - `Case 5`: clustering configuration used for forecasting.
 
-Legacy and exploratory notebooks are still present in the repo, but the final workflows we recommend are:
+The final workflows are:
 
 - [`notebooks/Clustering.ipynb`](notebooks/Clustering.ipynb)
 - [`notebooks/XGB_Orchestration.ipynb`](notebooks/XGB_Orchestration.ipynb)
@@ -27,8 +27,6 @@ We intentionally focused the final submission on:
 - XGB forecasting,
 - AGP forecasting.
 
-The repository also contains older SVM / GP / exploratory notebooks, but they are not to be considered as the final submissions choice of use.
-
 ## Repository Overview
 
 Important folders and files:
@@ -38,8 +36,12 @@ Important folders and files:
   - `sample_24.csv`: 2024 household consumption data used for evaluation / forecasting
 - `data/processed/`
   - normalized data and exported forecast files
+- `data/predictions/`
+  - contains our final predictions using the Ensemble model
 - `notebooks/`
-  - final notebooks and older exploration notebooks
+  - final notebooks
+- `archive/`
+  - older notebooks of failed / dismissed experiments
 - `notebooks/outputs/feature/`
   - saved clustering labels and search summaries for `case1` to `case6`
 - `notebooks/outputs/shapelet/` and `notebooks/outputs/shapelet_experiments/`
@@ -176,7 +178,7 @@ Typical exports from the notebook are:
 - `agp_forecast_case5_clusters_cluster_specific_combined.csv`
 
 For a broader AGP sweep across all clustering cases, the older notebook
-[`notebooks/sparseGpForecasting.ipynb`](notebooks/sparseGpForecasting.ipynb)
+[`notebooks/archive/sparseGpForecasting.ipynb`](notebooks/archive/sparseGpForecasting.ipynb)
 is still in the repo, but `AGP.ipynb` is the final notebook we point to first.
 
 ## What Is Already Reproducible From `main`
@@ -203,13 +205,8 @@ On the current `main` branch, the cleanest reproducible story is:
 
 ### AGP + XGB Combination
 
-- A standalone, fully packaged AGP + XGB ensemble / blending pipeline is not clearly wired into the tracked `main` branch as one final notebook or script.
-- The current `main` branch is strongest for:
-  - final clustering,
-  - XGB runs,
-  - AGP runs,
-  - saved outputs,
-  - and comparison through notebooks / exported files.
+- A standalone AGP + XGB ensemble/blending pipeline is available as [src/forecasting/combine_predictions_case5.py](src/forecasting/combine_predictions_case5.py#L1); use that script to combine AGP and XGB outputs for Case 5. The script writes a combined file by default to `outputs/pred_combined_case5.csv` but you may override the `--out` argument.
+- Ensemble-ready predictions (final, weighted-average forecasts used for submission/analysis) are available as [data/predictions/weighted_average_predictions.csv](data/predictions/weighted_average_predictions.csv#L1).
 
 ## Minimal Reproduction Path
 
@@ -220,8 +217,9 @@ If you only want the shortest path to our final results:
 1. Run `notebooks/XGB_Orchestration.ipynb` in Kaggle with a `P100` GPU for the XGB workflow.
 1. Run `notebooks/AGP.ipynb` for the AGP workflow.
 1. Compare against the tracked outputs in `outputs/` and the saved report-aligned artifacts in `notebooks/outputs/`.
+1. Use the final ensemble predictions for submission/analysis: [data/predictions/weighted_average_predictions.csv](data/predictions/weighted_average_predictions.csv#L1). If you prefer the AGP+XGB case-5 combined output, see [outputs/pred_combined_case5.csv](outputs/pred_combined_case5.csv#L1) (the default output of `src/forecasting/combine_predictions_case5.py`).
 
 
 
 ## Disclaimer:
-This README was partially created with AI assistance and was compiled using information from the repository code, notebooks, tracked outputs, and other submission artifacts such as the final report and presentation.
+The creation of the README was assisted by AI and was compiled using information from the repository code, notebooks, tracked outputs, and other submission artifacts such as the final report and presentation.
